@@ -1,0 +1,188 @@
+<title>Stuck SOL Scanner</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --card: #fff; --fg: #1a1d21; --muted: #6b7280;
+    --border: #e3e6ea; --accent: #7c3aed; --accent-fg:#fff;
+    --good:#0e9f6e; --warn:#c2410c; --row:#fafbfc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0e1013; --card:#181b1f; --fg:#e6e8eb; --muted:#9aa1a9;
+      --border:#2a2f36; --accent:#a78bfa; --row:#1d2126; }
+  }
+  :root[data-theme="light"] { --bg:#f7f8fa; --card:#fff; --fg:#1a1d21; --muted:#6b7280; --border:#e3e6ea; --row:#fafbfc; }
+  :root[data-theme="dark"] { --bg:#0e1013; --card:#181b1f; --fg:#e6e8eb; --muted:#9aa1a9; --border:#2a2f36; --row:#1d2126; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+    font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 28px 20px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; font-size: 14px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:12px;
+    padding:18px; margin-bottom:18px; }
+  label { display:block; font-weight:600; font-size:13px; margin-bottom:6px; }
+  textarea, input {
+    width:100%; background:var(--bg); color:var(--fg); border:1px solid var(--border);
+    border-radius:8px; padding:10px 12px; font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  textarea { min-height: 96px; resize: vertical; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-top:12px; }
+  .row > div { flex:1; min-width: 200px; }
+  .presets { display:flex; gap:8px; flex-wrap:wrap; margin:10px 0 0; }
+  .chip { cursor:pointer; border:1px solid var(--border); background:var(--bg);
+    color:var(--fg); border-radius:999px; padding:5px 12px; font-size:12px; font-weight:600; }
+  .chip:hover { border-color: var(--accent); }
+  button.go { background:var(--accent); color:var(--accent-fg); border:none; border-radius:8px;
+    padding:11px 20px; font-size:14px; font-weight:700; cursor:pointer; }
+  button.go:disabled { opacity:.5; cursor:default; }
+  .tablewrap { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--border); white-space:nowrap; }
+  th { color:var(--muted); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.03em; }
+  td.num { text-align:right; font-family:ui-monospace,monospace; }
+  .stuck { font-weight:700; }
+  .stuck.pos { color:var(--warn); }
+  .badge { font-size:11px; padding:2px 8px; border-radius:999px; font-weight:600; }
+  .badge.active { background:color-mix(in srgb,var(--good) 18%,transparent); color:var(--good); }
+  .badge.revoked { background:color-mix(in srgb,var(--warn) 18%,transparent); color:var(--warn); }
+  .mono { font-family:ui-monospace,monospace; font-size:11px; color:var(--muted); }
+  .total { margin-top:14px; font-size:15px; font-weight:700; }
+  .msg { margin-top:12px; font-size:13px; color:var(--muted); }
+  .msg.err { color:var(--warn); }
+  .note { font-size:12px; color:var(--muted); margin-top:8px; line-height:1.5; }
+  a { color: var(--accent); }
+</style>
+
+<div class="wrap">
+  <h1>Stuck SOL Scanner</h1>
+  <p class="sub">Finds native SOL bricked above the rent-exempt floor inside SPL token <b>mint accounts</b>. Read-only — never asks for a key.</p>
+
+  <div class="card">
+    <label for="mints">Mint addresses (one per line, optional <span class="mono">LABEL,MINT</span>)</label>
+    <textarea id="mints" spellcheck="false"></textarea>
+    <div class="presets" id="presets"></div>
+    <div class="row">
+      <div>
+        <label for="rpc">RPC endpoint</label>
+        <input id="rpc" value="https://api.mainnet-beta.solana.com" spellcheck="false">
+      </div>
+      <button class="go" id="go">Scan</button>
+    </div>
+    <p class="note">Public RPC rate-limits hard — for big sweeps use a Helius/Triton/QuickNode URL. This page runs entirely in your browser; nothing is sent anywhere except the RPC you choose.</p>
+  </div>
+
+  <div class="card" id="out" style="display:none">
+    <div class="tablewrap">
+      <table id="tbl">
+        <thead><tr>
+          <th>Token</th><th style="text-align:right">Stuck SOL</th>
+          <th style="text-align:right">Balance</th><th>Recoverable via</th><th>Mint</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="total" id="total"></div>
+    <div class="msg" id="msg"></div>
+  </div>
+</div>
+
+<script>
+const LAMPORTS = 1e9;
+const PRESETS = [
+  ["BOME","ukHH6c7mMyiWCf1b9pnWe25TSpkDDt3H5pQZgZ74J82"],
+  ["TRUMP","6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN"],
+  ["MELANIA","FUAfBo2jgks6gB4Z4LfZkqSZgzNucisEHqnNebaRxM1P"],
+  ["WSOL","So11111111111111111111111111111111111111112"],
+];
+const $ = s => document.querySelector(s);
+const ta = $("#mints");
+ta.value = PRESETS.map(([l,m]) => `${l},${m}`).join("\n");
+
+const presetBox = $("#presets");
+presetBox.innerHTML = '<span style="font-size:12px;color:var(--muted);align-self:center">Presets:</span>';
+PRESETS.forEach(([l,m]) => {
+  const b = document.createElement("span");
+  b.className = "chip"; b.textContent = l;
+  b.onclick = () => {
+    const line = `${l},${m}`;
+    const lines = ta.value.split("\n").map(x=>x.trim()).filter(Boolean);
+    if (!lines.some(x => x.includes(m))) ta.value = (ta.value.trim()+"\n"+line).trim();
+  };
+  presetBox.appendChild(b);
+});
+const allBtn = document.createElement("span");
+allBtn.className="chip"; allBtn.textContent="Reset to all";
+allBtn.onclick = () => ta.value = PRESETS.map(([l,m])=>`${l},${m}`).join("\n");
+presetBox.appendChild(allBtn);
+
+async function rpc(url, method, params) {
+  const r = await fetch(url, {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({jsonrpc:"2.0", id:1, method, params})
+  });
+  const j = await r.json();
+  if (j.error) throw new Error(j.error.message || JSON.stringify(j.error));
+  return j.result;
+}
+
+function parseTargets() {
+  return ta.value.split("\n").map(l => l.split("#")[0].trim()).filter(Boolean).map(l => {
+    if (l.includes(",")) { const [lab,mint] = l.split(","); return [lab.trim(), mint.trim()]; }
+    return [l.slice(0,6), l];
+  });
+}
+
+$("#go").onclick = async () => {
+  const url = $("#rpc").value.trim();
+  const targets = parseTargets();
+  const go = $("#go"); go.disabled = true; go.textContent = "Scanning…";
+  const out = $("#out"), tbody = $("#tbl tbody"), msg = $("#msg");
+  out.style.display = "block"; tbody.innerHTML = ""; msg.textContent = ""; msg.className="msg";
+  $("#total").textContent = "";
+  try {
+    const addrs = targets.map(t => t[1]);
+    const res = await rpc(url, "getMultipleAccounts", [addrs, {encoding:"jsonParsed"}]);
+    const vals = res.value || [];
+    const rentCache = {};
+    const rows = [];
+    for (let i=0;i<targets.length;i++){
+      const [label, mint] = targets[i]; const v = vals[i];
+      if (!v) { rows.push({label, mint, err:"not found"}); continue; }
+      const space = v.space ?? v.data?.parsed?.info?.space ?? 82;
+      if (rentCache[space] === undefined)
+        rentCache[space] = await rpc(url,"getMinimumBalanceForRentExemption",[space]);
+      const isMint = v.data?.parsed?.type === "mint";
+      const auth = isMint ? v.data.parsed.info.mintAuthority : null;
+      const excess = (v.lamports - rentCache[space]) / LAMPORTS;
+      rows.push({label, mint, isMint, balance:v.lamports/LAMPORTS, excess, auth,
+        owner:v.owner});
+    }
+    rows.sort((a,b) => (b.excess||-1) - (a.excess||-1));
+    let total = 0;
+    for (const r of rows) {
+      const tr = document.createElement("tr");
+      if (r.err) {
+        tr.innerHTML = `<td>${r.label}</td><td class="num">—</td><td class="num">—</td>
+          <td>${r.err}</td><td class="mono">${short(r.mint)}</td>`;
+        tbody.appendChild(tr); continue;
+      }
+      total += Math.max(r.excess,0);
+      const rec = r.auth
+        ? `<span class="badge active">mint authority</span>`
+        : `<span class="badge revoked">mint's own key only</span>`;
+      const note = r.isMint ? "" : ` <span class="mono">(not an SPL mint)</span>`;
+      tr.innerHTML = `<td><b>${r.label}</b>${note}</td>
+        <td class="num stuck ${r.excess>0?'pos':''}">${r.excess.toFixed(4)}</td>
+        <td class="num">${r.balance.toFixed(4)}</td>
+        <td>${rec}</td>
+        <td class="mono"><a href="https://solscan.io/account/${r.mint}" target="_blank">${short(r.mint)}</a></td>`;
+      tbody.appendChild(tr);
+    }
+    $("#total").textContent = `Total stuck: ${total.toFixed(4)} SOL across ${rows.filter(r=>!r.err).length} mint(s)`;
+  } catch (e) {
+    msg.className = "msg err";
+    msg.textContent = "Error: " + e.message + "  (rate limit? try a dedicated RPC URL, or check CORS if opening from file://)";
+  } finally {
+    go.disabled = false; go.textContent = "Scan";
+  }
+};
+function short(a){ return a ? a.slice(0,4)+"…"+a.slice(-4) : ""; }
+</script>
